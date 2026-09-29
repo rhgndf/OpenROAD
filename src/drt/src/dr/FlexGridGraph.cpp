@@ -89,6 +89,15 @@ void FlexGridGraph::initGrids(const frLayerCoordTrackPatternMap& xMap,
   frMIdx xDim, yDim, zDim;
   getDim(xDim, yDim, zDim);
   const int capacity = xDim * yDim * zDim;
+  layerStrides_.clear();
+  layerStrides_.reserve(zDim);
+  for (frMIdx z = 0; z < zDim; z++) {
+    if (getZDir(z) == odb::dbTechLayerDir::HORIZONTAL) {
+      layerStrides_.push_back({z * xDim * yDim, 1, xDim});
+    } else {
+      layerStrides_.push_back({z * xDim * yDim, yDim, 1});
+    }
+  }
 
   nodes_.clear();
   nodes_.resize(capacity, Node());

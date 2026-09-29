@@ -951,6 +951,7 @@ class FlexGridGraph
     zHeights_.clear();
     zHeights_.shrink_to_fit();
     layerRouteDirections_.clear();
+    layerStrides_.clear();
     yCoords_.shrink_to_fit();
     yCoords_.clear();
     yCoords_.shrink_to_fit();
@@ -1065,6 +1066,15 @@ class FlexGridGraph
   frVector<frLayerNum> zCoords_;
   frVector<frCoord> zHeights_;  // accumulated Z diff
   std::vector<odb::dbTechLayerDir> layerRouteDirections_;
+  // Node index strides per layer, see getIdx().  Nodes are contiguous along
+  // the layer's preferred direction.
+  struct LayerStride
+  {
+    frMIdx base;
+    frMIdx x;
+    frMIdx y;
+  };
+  std::vector<LayerStride> layerStrides_;
   odb::Rect dieBox_;
   frUInt4 ggDRCCost_ = 0;
   frUInt4 ggMarkerCost_ = 0;
@@ -1125,15 +1135,8 @@ class FlexGridGraph
   // internal getters
   frMIdx getIdx(frMIdx xIdx, frMIdx yIdx, frMIdx zIdx) const
   {
-    auto xSize = xCoords_.size();
-    auto ySize = yCoords_.size();
-
-    frMIdx zDirModifier = (getZDir(zIdx) == odb::dbTechLayerDir::HORIZONTAL)
-                              ? (xIdx + yIdx * xSize)
-                              : (yIdx + xIdx * ySize);
-    frMIdx partialCoordinates = zIdx * xSize * ySize;
-
-    return zDirModifier + partialCoordinates;
+    const LayerStride& stride = layerStrides_[zIdx];
+    return stride.base + xIdx * stride.x + yIdx * stride.y;
   }
 
   frUInt4 addToByte(frUInt4 augend, frUInt4 summand)

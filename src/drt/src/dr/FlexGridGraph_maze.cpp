@@ -95,6 +95,9 @@ void FlexGridGraph::expand(FlexWavefrontGrid& currGrid,
   getPoint(currPt, gridX, gridY);
   frCoord currDist = odb::Point::manhattanDistance(currPt, centerPt);
 
+  const frCoord edgeLength
+      = getEdgeLength(currGrid.x(), currGrid.y(), currGrid.z(), dir);
+
   // vlength calculation
   frCoord currVLengthX = 0;
   frCoord currVLengthY = 0;
@@ -111,11 +114,9 @@ void FlexGridGraph::expand(FlexWavefrontGrid& currGrid,
     if (currVLengthX != std::numeric_limits<frCoord>::max()
         && currVLengthY != std::numeric_limits<frCoord>::max()) {
       if (dir == frDirEnum::W || dir == frDirEnum::E) {
-        nextVLengthX
-            += getEdgeLength(currGrid.x(), currGrid.y(), currGrid.z(), dir);
+        nextVLengthX += edgeLength;
       } else {
-        nextVLengthY
-            += getEdgeLength(currGrid.x(), currGrid.y(), currGrid.z(), dir);
+        nextVLengthY += edgeLength;
       }
     }
   }
@@ -125,12 +126,12 @@ void FlexGridGraph::expand(FlexWavefrontGrid& currGrid,
   auto nextTLength = currTLength;
   // if there was a turn, then add tlength
   if (currTLength != std::numeric_limits<frCoord>::max()) {
-    nextTLength += getEdgeLength(currGrid.x(), currGrid.y(), currGrid.z(), dir);
+    nextTLength += edgeLength;
   }
   // if current is a turn, then reset tlength
   if (currGrid.getLastDir() != frDirEnum::UNKNOWN
       && currGrid.getLastDir() != dir) {
-    nextTLength = getEdgeLength(currGrid.x(), currGrid.y(), currGrid.z(), dir);
+    nextTLength = edgeLength;
   }
   // if current is a via, then reset tlength
   if (dir == frDirEnum::U || dir == frDirEnum::D) {
@@ -552,8 +553,7 @@ frCost FlexGridGraph::getCosts(frMIdx gridX,
   frUInt4 jumper_cost = route_with_jumpers ? 10 : 1;
 
   // temporarily disable guideCost
-  return getEdgeLength(gridX, gridY, gridZ, dir)
-         + (gridCost ? router_cfg_->GRIDCOST * edgeLength : 0)
+  return edgeLength + (gridCost ? router_cfg_->GRIDCOST * edgeLength : 0)
          + (drcCost ? ggDRCCost_ * edgeLength : 0)
          + (markerCost ? ggMarkerCost_ * edgeLength : 0)
          + (shapeCost ? ggFixedShapeCost_ * edgeLength : 0)
@@ -617,12 +617,16 @@ bool FlexGridGraph::isExpandable(const FlexWavefrontGrid& currGrid,
   frMIdx gridX = currGrid.x();
   frMIdx gridY = currGrid.y();
   frMIdx gridZ = currGrid.z();
-  bool hg = hasEdge(gridX, gridY, gridZ, dir);
+  if (!hasEdge(gridX, gridY, gridZ, dir)) {
+    return false;
+  }
   reverse(gridX, gridY, gridZ, dir);
-  if (!hg || isSrc(gridX, gridY, gridZ)
-      || (getPrevAstarNodeDir({gridX, gridY, gridZ}) != frDirEnum::UNKNOWN)
-      ||  // comment out for non-buffer enablement
-      currGrid.getLastDir() == dir) {
+  // comment out for non-buffer enablement
+  if (currGrid.getLastDir() == dir) {
+    return false;
+  }
+  if (isSrc(gridX, gridY, gridZ)
+      || getPrevAstarNodeDir({gridX, gridY, gridZ}) != frDirEnum::UNKNOWN) {
     return false;
   }
   if (ndr_) {
