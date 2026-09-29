@@ -3,9 +3,13 @@
 
 #pragma once
 
+#include <algorithm>
 #include <bitset>
+#include <cstdint>
 #include <memory>
 #include <queue>
+#include <stdexcept>
+#include <vector>
 
 #include "db/infra/frBox.h"
 #include "dr/FlexMazeTypes.h"
@@ -60,6 +64,7 @@ class FlexWavefrontGrid
   frMIdx z() const { return zIdx_; }
   frCost getPathCost() const { return pathCost_; }
   frCost getCost() const { return cost_; }
+  frCoord getDist() const { return dist_; }
   const std::bitset<WAVEFRONTBITSIZE>& getBackTraceBuffer() const
   {
     return backTraceBuffer_;
@@ -121,29 +126,89 @@ class FlexWavefrontGrid
   frUInt4 parent_id_{0};
 };
 
-class myPriorityQueue : public std::priority_queue<FlexWavefrontGrid>
-{
- public:
-  void cleanup() { this->c.clear(); }
-  void fit()
-  {
-    this->c.clear();
-    this->c.shrink_to_fit();
-  }
-};
-
 class FlexWavefront
 {
+  // Binary heap over compact 16-byte keys; the (64-byte) grids live in a slot
+  // pool with a free list.  The key order is exactly FlexWavefrontGrid's
+  // operator< (cost asc, dist asc, z desc, pathCost desc) and the heap uses the
+  // same std::push_heap/pop_heap as std::priority_queue, so the pop order is
+  // identical to the previous priority_queue<FlexWavefrontGrid>.
+  //
+  // hi = cost:32 dist:32, lo = ~z:6 ~pathCost:32 slot:26.  The comparison
+  // ignores the slot bits.  dist and z are never negative.
+  static constexpr int kLayerBits = 6;
+  static constexpr int kSlotBits = 26;
+  static_assert(kLayerBits + 32 + kSlotBits == 64);
+  static constexpr uint64_t kSlotMask = (uint64_t(1) << kSlotBits) - 1;
+  struct Key
+  {
+    uint64_t hi;
+    uint64_t lo;
+  };
+  struct KeyLess  // "a has lower priority than b"
+  {
+    bool operator()(const Key& a, const Key& b) const
+    {
+      return a.hi != b.hi ? a.hi > b.hi
+                          : (a.lo >> kSlotBits) > (b.lo >> kSlotBits);
+    }
+  };
+  static Key makeKey(const FlexWavefrontGrid& g, uint32_t slot)
+  {
+    const uint64_t inv_z = ~uint64_t(g.z()) & ((uint64_t(1) << kLayerBits) - 1);
+    const uint64_t inv_path_cost = uint32_t(~g.getPathCost());
+    return {(uint64_t(g.getCost()) << 32) | uint32_t(g.getDist()),
+            (inv_z << (32 + kSlotBits)) | (inv_path_cost << kSlotBits) | slot};
+  }
+  static uint32_t slotOf(const Key& key) { return key.lo & kSlotMask; }
+
  public:
-  bool empty() const { return wavefrontPQ_.empty(); }
-  const FlexWavefrontGrid& top() const { return wavefrontPQ_.top(); }
-  void pop() { wavefrontPQ_.pop(); }
-  void push(const FlexWavefrontGrid& in) { wavefrontPQ_.push(in); }
-  unsigned int size() const { return wavefrontPQ_.size(); }
-  void cleanup() { wavefrontPQ_.cleanup(); }
-  void fit() { wavefrontPQ_.fit(); }
+  bool empty() const { return heap_.empty(); }
+  const FlexWavefrontGrid& top() const { return slots_[slotOf(heap_.front())]; }
+  void pop()
+  {
+    std::pop_heap(heap_.begin(), heap_.end(), KeyLess{});
+    free_.push_back(slotOf(heap_.back()));
+    heap_.pop_back();
+  }
+  void push(const FlexWavefrontGrid& in)
+  {
+    if (in.z() >= (1 << kLayerBits)) {
+      throw std::length_error("FlexWavefront: too many routing layers");
+    }
+    uint32_t slot;
+    if (!free_.empty()) {
+      slot = free_.back();
+      free_.pop_back();
+      slots_[slot] = in;
+    } else {
+      if (slots_.size() > kSlotMask) {
+        throw std::length_error("FlexWavefront: too many wavefront entries");
+      }
+      slot = slots_.size();
+      slots_.push_back(in);
+    }
+    heap_.push_back(makeKey(in, slot));
+    std::push_heap(heap_.begin(), heap_.end(), KeyLess{});
+  }
+  unsigned int size() const { return heap_.size(); }
+  void cleanup()
+  {
+    heap_.clear();
+    slots_.clear();
+    free_.clear();
+  }
+  void fit()
+  {
+    cleanup();
+    heap_.shrink_to_fit();
+    slots_.shrink_to_fit();
+    free_.shrink_to_fit();
+  }
 
  private:
-  myPriorityQueue wavefrontPQ_;
+  std::vector<Key> heap_;
+  std::vector<FlexWavefrontGrid> slots_;
+  std::vector<uint32_t> free_;
 };
 }  // namespace drt
